@@ -64,18 +64,19 @@ void setup() {
     digitalWrite(auxOutPins[i], LOW);
   }
 
-  for (int i = 0; i < 4; i++) {
-    pinMode(auxInPins[i], INPUT);
-  }
+  pinMode(auxInPins[0], INPUT);
+  pinMode(auxInPins[1], INPUT);
+  pinMode(auxInPins[2], INPUT);
+  pinMode(auxInPins[3], INPUT);
 
   tft.initR(INITR_BLACKTAB);
   tft.setRotation(0);
   tft.setTextWrap(true);
   tft.fillScreen(ST77XX_BLACK);
 
-  drawMenu();
-}
-
+    tft.setCursor(74, y);
+    tft.print("CH");
+    tft.print(expectedCode[i]);
 
 void loop() {
   if (!inDetails) {
@@ -198,20 +199,9 @@ void runLTE4AuxWiringTest() {
   tft.fillScreen(ST77XX_BLACK);
   tft.setTextSize(1);
   tft.setTextColor(ST77XX_CYAN);
-  tft.setCursor(2, 2);
-  tft.println("LTE4-2000 AUX RUNTIME");
-  tft.drawLine(0, 12, 159, 12, ST77XX_WHITE);
-
-  // Header row
-  tft.setTextColor(ST77XX_WHITE);
-  tft.setCursor(1, 16);
-  tft.print("CONTACT");
-  tft.setCursor(72, 16);
-  tft.print("EXP");
-  tft.setCursor(100, 16);
-  tft.print("SEEN");
-  tft.setCursor(132, 16);
-  tft.print("ST");
+  tft.setCursor(8, 6);
+  tft.println("LTE4-2000 AUX TEST");
+  tft.drawLine(8, 16, 150, 16, ST77XX_WHITE);
 
   // Run signatures: CH1=1 pulse, CH2=2, CH3=3, CH4=4
   for (int ch = 0; ch < 4; ch++) {
@@ -225,44 +215,45 @@ void runLTE4AuxWiringTest() {
 
   clearAuxOutputs();
 
-  // Runtime status table per contact
+  // Display mapping and mismatches
+  tft.setTextColor(ST77XX_WHITE);
+  int y = 22;
   for (int i = 0; i < 4; i++) {
-    int y = 28 + (i * 18);
-    bool rowOk = (seen[i] == expectedCode[i]);
-
     tft.setCursor(2, y);
-    tft.setTextColor(ST77XX_WHITE);
+    tft.print(i + 1);
+    tft.print(": ");
     tft.print(channelNames[i]);
+    tft.print(" <- CH");
+    tft.println(seen[i]);
+    y += 12;
+  }
 
-    tft.setCursor(74, y);
-    tft.print("CH");
-    tft.print(expectedCode[i]);
-
-    tft.setCursor(102, y);
-    tft.print("CH");
-    tft.print(seen[i]);
-
-    tft.setCursor(132, y);
-    if (rowOk) {
-      tft.setTextColor(ST77XX_GREEN);
-      tft.print("OK");
-    } else {
-      tft.setTextColor(ST77XX_RED);
-      tft.print("BAD");
+  bool allOk = true;
+  for (int i = 0; i < 4; i++) {
+    if (seen[i] != expectedCode[i]) {
+      allOk = false;
+      break;
     }
   }
 
-  // Swap mapping messages in red
-  int msgY = 104;
-  for (int i = 0; i < 4 && msgY <= 122; i++) {
-    if (seen[i] >= 1 && seen[i] <= 4 && seen[i] != expectedCode[i]) {
-      tft.setCursor(1, msgY);
-      tft.setTextColor(ST77XX_RED);
-      tft.print("SWAP ");
-      tft.print(i + 1);
-      tft.print("<->");
-      tft.print(seen[i]);
-      msgY += 10;
+  tft.setCursor(2, 76);
+  if (allOk) {
+    tft.setTextColor(ST77XX_GREEN);
+    tft.println("WIRING OK");
+  } else {
+    tft.setTextColor(ST77XX_RED);
+    tft.println("SWAP DETECTED");
+
+    int row = 88;
+    tft.setTextColor(ST77XX_YELLOW);
+    for (int i = 0; i < 4 && row <= 112; i++) {
+      if (seen[i] >= 1 && seen[i] <= 4 && seen[i] != expectedCode[i]) {
+        tft.setCursor(2, row);
+        tft.print(channelNames[i]);
+        tft.print(" <-> ");
+        tft.println(channelNames[seen[i] - 1]);
+        row += 10;
+      }
     }
   }
 
