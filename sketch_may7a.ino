@@ -2,10 +2,6 @@
 #include <Adafruit_ST7735.h>
 #include <SPI.h>
 
-#include <Adafruit_GFX.h>
-#include <Adafruit_ST7735.h>
-#include <SPI.h>
-
 // TFT pins
 #define TFT_CS    5
 #define TFT_RST   4
@@ -16,6 +12,22 @@
 #define BTN_DOWN    33   // K2
 #define BTN_ENTER   25   // K3
 #define BTN_BACK    26   // K4
+
+// LTE4-2000 auxiliary wiring test pins
+// 4 unique pattern inject outputs
+const int auxOutPins[4] = {13, 12, 14, 27};
+// 4 sense inputs (35, VP/GPIO36, VN/GPIO39 are input-only)
+const int auxInPins[4] = {15, 35, 36, 39};
+
+const char* channelNames[4] = {
+  "AUX1 NO",
+  "AUX1 NC",
+  "AUX2 NO",
+  "AUX2 NC"
+};
+
+// expectedCode[input index] = expected source channel code
+const int expectedCode[4] = {1, 2, 3, 4};
 
 Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_RST);
 
@@ -34,139 +46,274 @@ const int menuSize = 6;
 int selected = 0;
 bool inDetails = false;
 
-void setup() {
-
-  // Button setup
-  pinMode(BTN_UP, INPUT_PULLUP);
-  pinMode(BTN_DOWN, INPUT_PULLUP);
-  pinMode(BTN_ENTER, INPUT_PULLUP);
-  pinMode(BTN_BACK, INPUT_PULLUP);
-
-  // TFT init
-  tft.initR(INITR_BLACKTAB);
-
-  tft.setRotation(0);
-
-  tft.setTextWrap(true);
+void drawMenu();
+void showSelected();
+void runLTE4AuxWiringTest() {
+  int seen[4] = {0, 0, 0, 0};
 
   tft.fillScreen(ST77XX_BLACK);
+  tft.setTextSize(1);
+  tft.setTextColor(ST77XX_CYAN);
+  tft.setCursor(2, 2);
+  tft.println("LTE4-2000 AUX RUNTIME");
+  tft.drawLine(0, 12, 159, 12, ST77XX_WHITE);
 
-  drawMenu();
+  // Header row
+  tft.setTextColor(ST77XX_WHITE);
+  tft.setCursor(1, 16);
+  tft.print("CONTACT");
+  tft.setCursor(72, 16);
+  tft.print("EXP");
+  tft.setCursor(100, 16);
+  tft.print("SEEN");
+  tft.setCursor(132, 16);
+  tft.print("ST");
+
+  // Run signatures: CH1=1 pulse, CH2=2, CH3=3, CH4=4
+  for (int ch = 0; ch < 4; ch++) {
+    sendCode(ch, ch + 1);
+  }
+
+  // Decode each input line
+  for (int i = 0; i < 4; i++) {
+    seen[i] = detectCodeOnInput(auxInPins[i], 260);
+  }
+
+  clearAuxOutputs();
+
+  // Table rows with per-contact status (green=ok, red=not ok/swapped)
+  for (int i = 0; i < 4; i++) {
+    int y = 28 + (i * 18);
+    bool rowOk = (seen[i] == expectedCode[i]);
+
+    tft.setCursor(1, y);
+    tft.setTextColor(ST77XX_WHITE);
+    tft.print(channelNames[i]);
+
+    tft.setCursor(74, y);
+    tft.print("CH");
+    tft.print(expectedCode[i]);
+
+    tft.setCursor(102, y);
+    tft.print("CH");
+    tft.print(seen[i]);
+
+    tft.setCursor(132, y);
+    if (rowOk) {
+      tft.setTextColor(ST77XX_GREEN);
+      tft.print("OK");
+    } else {
+      tft.setTextColor(ST77XX_RED);
+      tft.print("BAD");
+    }
+  }
+
+  // Show swap partner mapping lines (in red) when a row is not OK.
+  int msgY = 104;
+  for (int i = 0; i < 4 && msgY <= 122; i++) {
+    if (seen[i] >= 1 && seen[i] <= 4 && seen[i] != expectedCode[i]) {
+      tft.setCursor(1, msgY);
+      tft.setTextColor(ST77XX_RED);
+      tft.print("SWAP: ");
+      tft.print(channelNames[i]);
+      tft.print("<>");
+      tft.print(channelNames[seen[i] - 1]);
+      msgY += 10;
+    }
+  }
+
+  delay(400);
 }
+
 
 void loop() {
-
-  // ---------------- MENU MODE ----------------
-  if(!inDetails) {
-
-    // DOWN
-    if(digitalRead(BTN_DOWN) == LOW) {
-
+  if (!inDetails) {
+    if (digitalRead(BTN_DOWN) == LOW) {
       selected++;
-
-      if(selected >= menuSize) {
-        selected = 0;
-      }
-
+      if (selected >= menuSize) selected = 0;
       drawMenu();
       delay(200);
     }
 
-    // UP
-    if(digitalRead(BTN_UP) == LOW) {
-
+    if (digitalRead(BTN_UP) == LOW) {
       selected--;
-
-      if(selected < 0) {
-        selected = menuSize - 1;
-      }
-
+      if (selected < 0) selected = menuSize - 1;
       drawMenu();
       delay(200);
     }
 
-    // ENTER
-    if(digitalRead(BTN_ENTER) == LOW) {
-
+    if (digitalRead(BTN_ENTER) == LOW) {
       inDetails = true;
-
       showSelected();
-
       delay(200);
     }
-  }
+  } else {
+    if (selected == 0 && digitalRead(BTN_ENTER) == LOW) {
+      runLTE4AuxWiringTest();
+      delay(250);
+    }
 
-  // ---------------- DETAILS SCREEN ----------------
-  else {
-
-    // BACK
-    if(digitalRead(BTN_BACK) == LOW) {
-
+    if (digitalRead(BTN_BACK) == LOW) {
       inDetails = false;
-
       drawMenu();
-
       delay(200);
     }
   }
 }
 
-// ================= MENU SCREEN =================
-
 void drawMenu() {
-
   tft.fillScreen(ST77XX_BLACK);
-
-  // Title
   tft.setTextColor(ST77XX_CYAN);
   tft.setTextSize(2);
-
   tft.setCursor(10, 5);
   tft.println("CONTACTORS");
 
-  // Menu items
-  for(int i = 0; i < menuSize; i++) {
-
+  for (int i = 0; i < menuSize; i++) {
     int y = 30 + (i * 18);
-
-    // Highlight selected item
-    if(i == selected) {
-
+    if (i == selected) {
       tft.fillRect(0, y - 2, 160, 18, ST77XX_YELLOW);
       tft.setTextColor(ST77XX_BLACK);
-
     } else {
-
       tft.setTextColor(ST77XX_WHITE);
     }
-
     tft.setCursor(10, y);
     tft.println(menuItems[i]);
   }
 }
 
-// ================= DETAILS SCREEN =================
-
 void showSelected() {
-
   tft.fillScreen(ST77XX_BLACK);
-
   tft.setTextColor(ST77XX_GREEN);
   tft.setTextSize(2);
-
-  tft.setCursor(10, 20);
-  tft.println("SELECTED");
-
-  tft.drawLine(10, 45, 150, 45, ST77XX_WHITE);
-
-  tft.setCursor(10, 60);
+  tft.setCursor(10, 10);
   tft.println(menuItems[selected]);
 
-  // Back hint
+  tft.drawLine(10, 34, 150, 34, ST77XX_WHITE);
+
   tft.setTextSize(1);
+  tft.setTextColor(ST77XX_WHITE);
+
+  if (selected == 0) {
+    tft.setCursor(10, 46);
+    tft.println("ENTER: Run aux test");
+    tft.setCursor(10, 58);
+    tft.println("Detect NO/NC swaps");
+    tft.setCursor(10, 70);
+    tft.println("Detect cross swaps");
+  } else {
+    tft.setCursor(10, 52);
+    tft.println("No test defined yet");
+  }
 
   tft.setCursor(10, 110);
   tft.setTextColor(ST77XX_YELLOW);
-
   tft.println("K4 = BACK");
+}
+
+void sendCode(int ch, int pulses) {
+  for (int p = 0; p < pulses; p++) {
+    digitalWrite(auxOutPins[ch], HIGH);
+    delay(35);
+    digitalWrite(auxOutPins[ch], LOW);
+    delay(35);
+  }
+  delay(90);
+}
+
+int detectCodeOnInput(int pin, unsigned long windowMs) {
+  int edges = 0;
+  int last = digitalRead(pin);
+  unsigned long t0 = millis();
+
+  while (millis() - t0 < windowMs) {
+    int v = digitalRead(pin);
+    if (v != last) {
+      if (v == HIGH) edges++;
+      last = v;
+    }
+  }
+  return edges;
+}
+
+void clearAuxOutputs() {
+  for (int i = 0; i < 4; i++) {
+    digitalWrite(auxOutPins[i], LOW);
+  }
+}
+
+void runLTE4AuxWiringTest() {
+  int seen[4] = {0, 0, 0, 0};
+
+  tft.fillScreen(ST77XX_BLACK);
+  tft.setTextSize(1);
+  tft.setTextColor(ST77XX_CYAN);
+  tft.setCursor(2, 2);
+  tft.println("LTE4-2000 AUX RUNTIME");
+  tft.drawLine(0, 12, 159, 12, ST77XX_WHITE);
+
+  // Header row
+  tft.setTextColor(ST77XX_WHITE);
+  tft.setCursor(1, 16);
+  tft.print("CONTACT");
+  tft.setCursor(72, 16);
+  tft.print("EXP");
+  tft.setCursor(100, 16);
+  tft.print("SEEN");
+  tft.setCursor(132, 16);
+  tft.print("ST");
+
+  // Run signatures: CH1=1 pulse, CH2=2, CH3=3, CH4=4
+  for (int ch = 0; ch < 4; ch++) {
+    sendCode(ch, ch + 1);
+  }
+
+  // Decode each input line
+  for (int i = 0; i < 4; i++) {
+    seen[i] = detectCodeOnInput(auxInPins[i], 260);
+  }
+
+  clearAuxOutputs();
+
+  // Runtime status table per contact
+  for (int i = 0; i < 4; i++) {
+    int y = 28 + (i * 18);
+    bool rowOk = (seen[i] == expectedCode[i]);
+
+    tft.setCursor(2, y);
+    tft.setTextColor(ST77XX_WHITE);
+    tft.print(channelNames[i]);
+
+    tft.setCursor(74, y);
+    tft.print("CH");
+    tft.print(expectedCode[i]);
+
+    tft.setCursor(102, y);
+    tft.print("CH");
+    tft.print(seen[i]);
+
+    tft.setCursor(132, y);
+    if (rowOk) {
+      tft.setTextColor(ST77XX_GREEN);
+      tft.print("OK");
+    } else {
+      tft.setTextColor(ST77XX_RED);
+      tft.print("BAD");
+    }
+  }
+
+  // Swap mapping messages in red
+  int msgY = 104;
+  for (int i = 0; i < 4 && msgY <= 122; i++) {
+    if (seen[i] >= 1 && seen[i] <= 4 && seen[i] != expectedCode[i]) {
+      tft.setCursor(1, msgY);
+      tft.setTextColor(ST77XX_RED);
+      tft.print("SWAP ");
+      tft.print(i + 1);
+      tft.print("<->");
+      tft.print(seen[i]);
+      msgY += 10;
+    }
+  }
+
+  delay(400);
 }
