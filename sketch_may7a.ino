@@ -15,11 +15,8 @@
 
 // LTHE4-2000 AUX inputs: NO and NC for each AUX line
 const int NUM_AUX = 3;
-// Use only GPIOs with internal pull-ups for stable INPUT_PULLUP behavior.
-// Avoid GPIO34-39 here: they are input-only on ESP32 and do NOT have internal
-// pull-up/down resistors, so unconnected lines float and randomly toggle HIGH/LOW.
-const int auxNO[NUM_AUX] = {13, 14, 27};
-const int auxNC[NUM_AUX] = {16, 17, 21};
+const int auxNO[NUM_AUX] = {13, 12, 14};
+const int auxNC[NUM_AUX] = {27, 35, 36};
 
 const int delayBetween = 500;
 
@@ -42,7 +39,6 @@ void drawMenu();
 void showSelected();
 void runLTHE4AuxWiringTest();
 char readAuxStatus(int index);
-bool readFilteredPressed(int pin);
 void detectSwaps(char statusArray[]);
 
 void setup() {
@@ -147,21 +143,9 @@ void showSelected() {
   tft.println("K4 = BACK");
 }
 
-bool readFilteredPressed(int pin) {
-  const int sampleCount = 7;
-  int lowCount = 0;
-
-  for (int i = 0; i < sampleCount; i++) {
-    if (digitalRead(pin) == LOW) lowCount++;
-    delay(2);
-  }
-
-  return lowCount >= 5;
-}
-
 char readAuxStatus(int index) {
-  bool noPressed = readFilteredPressed(auxNO[index]);
-  bool ncPressed = readFilteredPressed(auxNC[index]);
+  bool noPressed = (digitalRead(auxNO[index]) == LOW);
+  bool ncPressed = (digitalRead(auxNC[index]) == LOW);
 
   if (!noPressed && !ncPressed) return 'O';
   if (noPressed && !ncPressed) return 'N';
