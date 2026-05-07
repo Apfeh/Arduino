@@ -74,8 +74,9 @@ void setup() {
   tft.setTextWrap(true);
   tft.fillScreen(ST77XX_BLACK);
 
-  drawMenu();
-}
+    tft.setCursor(74, y);
+    tft.print("CH");
+    tft.print(expectedCode[i]);
 
 void loop() {
   if (!inDetails) {
