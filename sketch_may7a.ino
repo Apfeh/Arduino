@@ -13,22 +13,10 @@
 #define BTN_ENTER   25   // K3
 #define BTN_BACK    26   // K4
 
-// LTHE4-2000 AUX inputs: each AUX channel has explicit NO + NC inputs.
-// IMPORTANT: do not use GPIO34-39 for floating-contact reads with INPUT_PULLUP.
-// GPIO34-39 are input-only and have no internal pull resistors; unconnected lines
-// float and can randomly toggle between HIGH/LOW due to noise.
-struct AuxChannel {
-  const char* name;
-  uint8_t pinNO;
-  uint8_t pinNC;
-};
-
-const AuxChannel auxChannels[] = {
-  {"A1", 13, 14},
-  {"A2", 27, 16},
-  {"A3", 17, 21}
-};
-const int NUM_AUX = sizeof(auxChannels) / sizeof(auxChannels[0]);
+// LTHE4-2000 AUX inputs: NO and NC for each AUX line
+const int NUM_AUX = 3;
+const int auxNO[NUM_AUX] = {13, 12, 14};
+const int auxNC[NUM_AUX] = {27, 35, 36};
 
 const int delayBetween = 500;
 
@@ -51,7 +39,6 @@ void drawMenu();
 void showSelected();
 void runLTHE4AuxWiringTest();
 char readAuxStatus(int index);
-bool readFilteredPressed(uint8_t pin);
 void detectSwaps(char statusArray[]);
 
 void setup() {
@@ -61,8 +48,8 @@ void setup() {
   pinMode(BTN_BACK, INPUT_PULLUP);
 
   for (int i = 0; i < NUM_AUX; i++) {
-    pinMode(auxChannels[i].pinNO, INPUT_PULLUP);
-    pinMode(auxChannels[i].pinNC, INPUT_PULLUP);
+    pinMode(auxNO[i], INPUT_PULLUP);
+    pinMode(auxNC[i], INPUT_PULLUP);
   }
 
   tft.initR(INITR_BLACKTAB);
@@ -156,22 +143,9 @@ void showSelected() {
   tft.println("K4 = BACK");
 }
 
-bool readFilteredPressed(uint8_t pin) {
-  const int sampleCount = 9;
-  int lowCount = 0;
-
-  for (int i = 0; i < sampleCount; i++) {
-    if (digitalRead(pin) == LOW) lowCount++;
-    delay(2);
-  }
-
-  // majority vote filter to suppress short noise spikes
-  return lowCount >= 6;
-}
-
 char readAuxStatus(int index) {
-  bool noPressed = readFilteredPressed(auxChannels[index].pinNO);
-  bool ncPressed = readFilteredPressed(auxChannels[index].pinNC);
+  bool noPressed = (digitalRead(auxNO[index]) == LOW);
+  bool ncPressed = (digitalRead(auxNC[index]) == LOW);
 
   if (!noPressed && !ncPressed) return 'O';
   if (noPressed && !ncPressed) return 'N';
@@ -205,7 +179,8 @@ void runLTHE4AuxWiringTest() {
   tft.setTextColor(ST77XX_WHITE);
   for (int i = 0; i < NUM_AUX; i++) {
     tft.setCursor(10, 24 + (i * 14));
-    tft.print(auxChannels[i].name);
+    tft.print("A");
+    tft.print(i + 1);
     tft.print(": ");
     tft.print(status[i]);
   }
