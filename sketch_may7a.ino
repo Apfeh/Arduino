@@ -11,10 +11,17 @@
 #define BTN_UP      32
 #define BTN_DOWN    33
 #define BTN_ENTER   25
-#define BTN_BACK    26   // physical back button, shown on screen as "#"
+#define BTN_BACK    26   // physical back button, shown on screen as "*"
 
 // Buzzer
 #define BUZZER_PIN  21
+
+// Coil energise output
+#define COIL_PIN    22
+
+// Screen size
+const int SCREEN_W = 128;
+const int SCREEN_H = 160;
 
 Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_RST);
 
@@ -32,6 +39,7 @@ int selected = 0;
 
 // UI states
 enum ScreenState {
+  SCREEN_WELCOME,
   SCREEN_MAIN_MENU,
   SCREEN_TEST_MENU,
   SCREEN_DETAIL_SCREEN,
@@ -39,7 +47,7 @@ enum ScreenState {
   SCREEN_AUTO_COIL_TEST
 };
 
-ScreenState currentScreen = SCREEN_MAIN_MENU;
+ScreenState currentScreen = SCREEN_WELCOME;
 int testSelected = 0;
 
 // -----------------------------------------------------------------------------
@@ -92,10 +100,19 @@ enum WireStatus {
   STATUS_BAD
 };
 
+// NO filter settings
+const uint8_t NO_SAMPLE_COUNT = 6;
+const uint8_t NO_REQUIRED_HITS = 4;
+const int NO_PWM_THRESHOLD = 15;
+const int NO_MAX_SPREAD = 18;
+
+// Coil state
+bool coilEnergised = false;
+
 // ---------- function prototypes ----------
+void drawWelcomeScreen();
 void drawMenu();
 void drawTestMenu();
-void showSelected();
 void drawDetailScreen();
 void drawAuxTestScreen();
 void drawAutoCoilScreen();
@@ -103,9 +120,11 @@ void updateAuxTestScreen();
 
 void setupPwmOutputs();
 void setupBuzzer();
+void setupCoil();
 
 int readDutyPercent(uint8_t pin);
 int matchExpectedWire(int measuredDuty);
+bool noContactHasSignal(uint8_t pin);
 WireStatus getWireStatus(uint8_t wireIndex, int measuredDuty);
 const char* statusText(WireStatus s);
 
@@ -122,6 +141,10 @@ void beepBack();
 
 void waitForRelease(uint8_t pin);
 
+bool usesSharedTestMenu(int index);
+void energiseCoil();
+void deenergiseCoil();
+
 // ---------- setup ----------
 void setup() {
   pinMode(BTN_UP, INPUT_PULLUP);
@@ -129,25 +152,36 @@ void setup() {
   pinMode(BTN_ENTER, INPUT_PULLUP);
   pinMode(BTN_BACK, INPUT_PULLUP);
 
-  // Inputs are pulldown so disconnected wires do not float.
   for (uint8_t i = 0; i < NUM_WIRES; i++) {
     pinMode(inPins[i], INPUT_PULLDOWN);
   }
 
   setupPwmOutputs();
   setupBuzzer();
+  setupCoil();
 
   tft.initR(INITR_BLACKTAB);
   tft.setRotation(0);
   tft.setTextWrap(false);
   tft.fillScreen(ST77XX_BLACK);
 
-  drawMenu();
+  drawWelcomeScreen();
 }
 
 // ---------- loop ----------
 void loop() {
   switch (currentScreen) {
+    case SCREEN_WELCOME:
+      if (digitalRead(BTN_ENTER) == LOW) {
+        beepEnter();
+        waitForRelease(BTN_ENTER);
+
+        currentScreen = SCREEN_MAIN_MENU;
+        selected = 0;
+        drawMenu();
+      }
+      break;
+
     case SCREEN_MAIN_MENU:
       if (digitalRead(BTN_DOWN) == LOW) {
         selected = (selected + 1) % menuSize;
@@ -168,7 +202,7 @@ void loop() {
         beepEnter();
         waitForRelease(BTN_ENTER);
 
-        if (selected == 0) {
+        if (usesSharedTestMenu(selected)) {
           currentScreen = SCREEN_TEST_MENU;
           testSelected = 0;
           drawTestMenu();
@@ -205,6 +239,7 @@ void loop() {
           lastTestUpdate = 0;
         } else {
           currentScreen = SCREEN_AUTO_COIL_TEST;
+          deenergiseCoil();
           drawAutoCoilScreen();
         }
       }
@@ -238,7 +273,7 @@ void loop() {
 
         currentScreen = SCREEN_TEST_MENU;
         drawTestMenu();
-        break; // stop here so AUX screen does not redraw over the menu
+        break;
       }
 
       if (millis() - lastTestUpdate >= testRefreshMs) {
@@ -248,9 +283,22 @@ void loop() {
       break;
 
     case SCREEN_AUTO_COIL_TEST:
+      if (digitalRead(BTN_ENTER) == LOW) {
+        beepEnter();
+        waitForRelease(BTN_ENTER);
+
+        if (coilEnergised) {
+          deenergiseCoil();
+        } else {
+          energiseCoil();
+        }
+        drawAutoCoilScreen();
+      }
+
       if (digitalRead(BTN_BACK) == LOW) {
         beepBack();
         waitForRelease(BTN_BACK);
+        deenergiseCoil();
         currentScreen = SCREEN_TEST_MENU;
         drawTestMenu();
       }
@@ -258,14 +306,17 @@ void loop() {
   }
 }
 
+// ---------- shared menu logic ----------
+bool usesSharedTestMenu(int index) {
+  return (index == 0 || index == 2 || index == 3 || index == 4);
+}
+
 // ---------- PWM setup ----------
 void setupPwmOutputs() {
-  // Arduino-ESP32 3.x LEDC API:
-  // ledcAttach(pin, freq, resolution), then ledcWrite(pin, duty)
   for (uint8_t i = 0; i < NUM_WIRES; i++) {
     pinMode(outPins[i], OUTPUT);
 
-    bool ok = ledcAttach(outPins[i], 1000, 8); // 1 kHz, 8-bit resolution
+    bool ok = ledcAttach(outPins[i], 1000, 8);
     if (!ok) {
       continue;
     }
@@ -278,10 +329,42 @@ void setupPwmOutputs() {
 // ---------- buzzer setup ----------
 void setupBuzzer() {
   pinMode(BUZZER_PIN, OUTPUT);
-
-  // Attach once. Tone frequency is changed later with ledcWriteTone().
   ledcAttach(BUZZER_PIN, 2000, 8);
   buzzerOff();
+}
+
+// ---------- coil setup ----------
+void setupCoil() {
+  pinMode(COIL_PIN, OUTPUT);
+  deenergiseCoil();
+}
+
+void energiseCoil() {
+  digitalWrite(COIL_PIN, HIGH);
+  coilEnergised = true;
+}
+
+void deenergiseCoil() {
+  digitalWrite(COIL_PIN, LOW);
+  coilEnergised = false;
+}
+
+// ---------- welcome screen ----------
+void drawWelcomeScreen() {
+  tft.fillScreen(ST77XX_BLACK);
+  tft.setTextWrap(false);
+
+  tft.setTextColor(ST77XX_CYAN);
+  tft.setTextSize(2);
+  tft.setCursor(24, 30);
+  tft.println("WELCOME");
+
+  tft.drawLine(12, 66, 116, 66, ST77XX_WHITE);
+
+  tft.setTextSize(1);
+  tft.setTextColor(ST77XX_WHITE);
+  tft.setCursor(26, 88);
+  tft.println("Press #");
 }
 
 // ---------- menu drawing ----------
@@ -289,19 +372,21 @@ void drawMenu() {
   tft.fillScreen(ST77XX_BLACK);
   tft.setTextColor(ST77XX_CYAN);
   tft.setTextSize(2);
-  tft.setCursor(10, 5);
+  tft.setCursor(4, 6);
   tft.println("CONTACTORS");
 
   for (int i = 0; i < menuSize; i++) {
-    int y = 30 + (i * 18);
+    int y = 28 + (i * 18);
+
     if (i == selected) {
-      tft.fillRect(0, y - 2, 160, 18, ST77XX_YELLOW);
+      tft.fillRect(0, y - 2, SCREEN_W, 16, ST77XX_YELLOW);
       tft.setTextColor(ST77XX_BLACK);
     } else {
       tft.setTextColor(ST77XX_WHITE);
     }
+
     tft.setTextSize(1);
-    tft.setCursor(10, y + 2);
+    tft.setCursor(8, y + 1);
     tft.println(menuItems[i]);
   }
 }
@@ -312,15 +397,15 @@ void drawTestMenu() {
   tft.setTextColor(ST77XX_CYAN);
   tft.setTextSize(2);
   tft.setCursor(8, 5);
-  tft.println("LTE4-2000");
+  tft.println(menuItems[selected]);
 
-  tft.drawLine(8, 28, 150, 28, ST77XX_WHITE);
+  tft.drawLine(8, 28, 120, 28, ST77XX_WHITE);
 
   tft.setTextSize(1);
   tft.setTextColor(ST77XX_WHITE);
 
   if (testSelected == 0) {
-    tft.fillRect(0, 40, 160, 16, ST77XX_YELLOW);
+    tft.fillRect(0, 40, SCREEN_W, 16, ST77XX_YELLOW);
     tft.setTextColor(ST77XX_BLACK);
   } else {
     tft.setTextColor(ST77XX_WHITE);
@@ -329,19 +414,19 @@ void drawTestMenu() {
   tft.println("Run AUX test");
 
   if (testSelected == 1) {
-    tft.fillRect(0, 58, 160, 16, ST77XX_YELLOW);
+    tft.fillRect(0, 58, SCREEN_W, 16, ST77XX_YELLOW);
     tft.setTextColor(ST77XX_BLACK);
   } else {
     tft.setTextColor(ST77XX_WHITE);
   }
   tft.setCursor(10, 60);
-  tft.println("Run Auto coil test");
+  tft.println("Automatic function");
 
   tft.setTextColor(ST77XX_YELLOW);
   tft.setCursor(10, 100);
-  tft.println("ENTER = SELECT");
+  tft.println("# = SELECT");
   tft.setCursor(10, 112);
-  tft.println("# = BACK");
+  tft.println("* = BACK");
 }
 
 void drawDetailScreen() {
@@ -351,7 +436,7 @@ void drawDetailScreen() {
   tft.setCursor(10, 10);
   tft.println(menuItems[selected]);
 
-  tft.drawLine(10, 34, 150, 34, ST77XX_WHITE);
+  tft.drawLine(10, 34, 118, 34, ST77XX_WHITE);
 
   tft.setTextSize(1);
   tft.setTextColor(ST77XX_WHITE);
@@ -359,9 +444,9 @@ void drawDetailScreen() {
   tft.setCursor(10, 52);
   tft.println("No test defined yet");
 
-  tft.setCursor(10, 110);
+  tft.setCursor(10, 120);
   tft.setTextColor(ST77XX_YELLOW);
-  tft.println("# = BACK");
+  tft.println("* = BACK");
 }
 
 // ---------- AUX test screen ----------
@@ -372,29 +457,26 @@ void drawAuxTestScreen() {
   tft.setTextSize(1);
   tft.setCursor(8, 6);
   tft.println("LTE4-2000 AUX TEST");
-  tft.drawLine(8, 16, 150, 16, ST77XX_WHITE);
+  tft.drawLine(8, 16, 120, 16, ST77XX_WHITE);
 
-  // Headers
   tft.setTextColor(ST77XX_WHITE);
-  tft.setCursor(58, 26);
+  tft.setCursor(52, 26);
   tft.print("NC");
-  tft.setCursor(110, 26);
+  tft.setCursor(96, 26);
   tft.print("NO");
 
-  // Row labels
   tft.setCursor(8, 42);
   tft.print("AUX1");
   tft.setCursor(8, 58);
   tft.print("AUX2");
 
-  // Placeholders
-  tft.setCursor(58, 42);
+  tft.setCursor(52, 42);
   tft.print("-");
-  tft.setCursor(110, 42);
+  tft.setCursor(96, 42);
   tft.print("-");
-  tft.setCursor(58, 58);
+  tft.setCursor(52, 58);
   tft.print("-");
-  tft.setCursor(110, 58);
+  tft.setCursor(96, 58);
   tft.print("-");
 
   tft.setTextColor(ST77XX_YELLOW);
@@ -405,8 +487,8 @@ void drawAuxTestScreen() {
   tft.setCursor(10, 106);
   tft.println("BAD = no valid match");
 
-  tft.setCursor(10, 118);
-  tft.print("# = BACK");
+  tft.setCursor(10, 120);
+  tft.print("* = BACK");
 }
 
 void updateAuxTestScreen() {
@@ -421,23 +503,20 @@ void updateAuxTestScreen() {
   AlarmState alarm = getOverallAlarmState(status);
   updateBuzzer(alarm);
 
-  // Clear only the status area
-  tft.fillRect(48, 38, 110, 35, ST77XX_BLACK);
+  tft.fillRect(48, 38, 80, 35, ST77XX_BLACK);
 
   tft.setTextSize(1);
   tft.setTextColor(ST77XX_WHITE);
 
-  // AUX1 row
-  tft.setCursor(58, 42);
-  tft.print(statusText(status[0]));  // AUX1 NC
-  tft.setCursor(110, 42);
-  tft.print(statusText(status[1]));  // AUX1 NO
+  tft.setCursor(52, 42);
+  tft.print(statusText(status[0]));
+  tft.setCursor(96, 42);
+  tft.print(statusText(status[1]));
 
-  // AUX2 row
-  tft.setCursor(58, 58);
-  tft.print(statusText(status[2]));  // AUX2 NC
-  tft.setCursor(110, 58);
-  tft.print(statusText(status[3]));  // AUX2 NO
+  tft.setCursor(52, 58);
+  tft.print(statusText(status[2]));
+  tft.setCursor(96, 58);
+  tft.print(statusText(status[3]));
 }
 
 // ---------- Auto coil test screen ----------
@@ -449,24 +528,32 @@ void drawAutoCoilScreen() {
   tft.setCursor(10, 10);
   tft.println("AUTO COIL");
 
-  tft.drawLine(10, 34, 150, 34, ST77XX_WHITE);
+  tft.drawLine(10, 34, 118, 34, ST77XX_WHITE);
 
   tft.setTextSize(1);
   tft.setTextColor(ST77XX_WHITE);
   tft.setCursor(10, 52);
-  tft.println("Auto coil test menu");
-  tft.setCursor(10, 64);
-  tft.println("Logic can be added here");
+  tft.println("Automatic function");
+
+  tft.setCursor(10, 66);
+  if (coilEnergised) {
+    tft.print("Status: ENERGISED");
+  } else {
+    tft.print("Status: DE-ENERGISED");
+  }
 
   tft.setTextColor(ST77XX_YELLOW);
-  tft.setCursor(10, 110);
-  tft.println("# = BACK");
+  tft.setCursor(10, 82);
+  tft.println("# = TOGGLE");
+
+  tft.setCursor(10, 120);
+  tft.println("* = BACK");
 }
 
 // ---------- wire reading ----------
 int readDutyPercent(uint8_t pin) {
-  const unsigned long sampleWindowUs = 20000; // 20 ms
-  const unsigned int sampleDelayUs = 100;     // 100 us
+  const unsigned long sampleWindowUs = 20000;
+  const unsigned int sampleDelayUs = 100;
 
   uint32_t highCount = 0;
   uint32_t totalCount = 0;
@@ -485,7 +572,7 @@ int readDutyPercent(uint8_t pin) {
 }
 
 int matchExpectedWire(int measuredDuty) {
-  const int tolerance = 8; // percent
+  const int tolerance = 8;
 
   for (int i = 0; i < NUM_WIRES; i++) {
     if (abs(measuredDuty - dutyPercent[i]) <= tolerance) {
@@ -496,7 +583,46 @@ int matchExpectedWire(int measuredDuty) {
   return -1;
 }
 
+bool noContactHasSignal(uint8_t pin) {
+  const uint8_t sampleCount = 6;
+  const uint8_t requiredHits = 4;
+  const int signalThreshold = 15;
+  const int maxSpread = 18;
+
+  int readings[sampleCount];
+  int hits = 0;
+
+  for (uint8_t i = 0; i < sampleCount; i++) {
+    readings[i] = readDutyPercent(pin);
+    if (readings[i] >= signalThreshold) {
+      hits++;
+    }
+    delay(5);
+  }
+
+  int minV = readings[0];
+  int maxV = readings[0];
+
+  for (uint8_t i = 1; i < sampleCount; i++) {
+    if (readings[i] < minV) minV = readings[i];
+    if (readings[i] > maxV) maxV = readings[i];
+  }
+
+  if ((maxV - minV) > maxSpread) {
+    return false;
+  }
+
+  return (hits >= requiredHits);
+}
+
 WireStatus getWireStatus(uint8_t wireIndex, int measuredDuty) {
+  if (wireIndex == 1 || wireIndex == 3) {
+    if (noContactHasSignal(inPins[wireIndex])) {
+      return STATUS_BAD;
+    }
+    return STATUS_OKAY;
+  }
+
   int matchedIndex = matchExpectedWire(measuredDuty);
 
   if (matchedIndex == -1) {
@@ -513,7 +639,7 @@ WireStatus getWireStatus(uint8_t wireIndex, int measuredDuty) {
 const char* statusText(WireStatus s) {
   switch (s) {
     case STATUS_OKAY:   return "OKAY";
-    case STATUS_SWAPED:  return "SWAPED";
+    case STATUS_SWAPED: return "SWAPED";
     case STATUS_BAD:    return "BAD";
     default:            return "?";
   }
