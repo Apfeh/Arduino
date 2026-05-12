@@ -117,6 +117,7 @@ void drawDetailScreen();
 void drawAuxTestScreen();
 void drawAutoCoilScreen();
 void updateAuxTestScreen();
+void updateAutoCoilAuxStatus();
 
 void setupPwmOutputs();
 void setupBuzzer();
@@ -241,6 +242,7 @@ void loop() {
           currentScreen = SCREEN_AUTO_COIL_TEST;
           deenergiseCoil();
           drawAutoCoilScreen();
+          lastTestUpdate = 0;
         }
       }
 
@@ -293,6 +295,11 @@ void loop() {
           energiseCoil();
         }
         drawAutoCoilScreen();
+      }
+
+      if (millis() - lastTestUpdate >= testRefreshMs) {
+        lastTestUpdate = millis();
+        updateAutoCoilAuxStatus();
       }
 
       if (digitalRead(BTN_BACK) == LOW) {
@@ -539,6 +546,26 @@ void drawAutoCoilScreen() {
     tft.print("Status: DE-ENERGISED");
   }
 
+  tft.setTextColor(ST77XX_WHITE);
+  tft.setCursor(52, 44);
+  tft.print("NC");
+  tft.setCursor(96, 44);
+  tft.print("NO");
+
+  tft.setCursor(8, 60);
+  tft.print("AUX1");
+  tft.setCursor(8, 76);
+  tft.print("AUX2");
+
+  tft.setCursor(52, 60);
+  tft.print("-");
+  tft.setCursor(96, 60);
+  tft.print("-");
+  tft.setCursor(52, 76);
+  tft.print("-");
+  tft.setCursor(96, 76);
+  tft.print("-");
+
   tft.setTextColor(ST77XX_YELLOW);
   tft.setCursor(10, 82);
   tft.println("OKAY = correct wire");
@@ -551,8 +578,36 @@ void drawAutoCoilScreen() {
   tft.setCursor(10, 108);
   tft.println("# = TOGGLE");
 
-  tft.setCursor(10, 120);
+  tft.setCursor(10, 104);
   tft.println("* = BACK");
+}
+
+void updateAutoCoilAuxStatus() {
+  int measured[NUM_WIRES];
+  WireStatus status[NUM_WIRES];
+
+  for (uint8_t i = 0; i < NUM_WIRES; i++) {
+    measured[i] = readDutyPercent(inPins[i]);
+    status[i] = getWireStatus(i, measured[i]);
+  }
+
+  AlarmState alarm = getOverallAlarmState(status);
+  updateBuzzer(alarm);
+
+  tft.fillRect(48, 56, 80, 35, ST77XX_BLACK);
+
+  tft.setTextSize(1);
+  tft.setTextColor(ST77XX_WHITE);
+
+  tft.setCursor(52, 60);
+  tft.print(statusText(status[0]));
+  tft.setCursor(96, 60);
+  tft.print(statusText(status[1]));
+
+  tft.setCursor(52, 76);
+  tft.print(statusText(status[2]));
+  tft.setCursor(96, 76);
+  tft.print(statusText(status[3]));
 }
 
 // ---------- wire reading ----------
