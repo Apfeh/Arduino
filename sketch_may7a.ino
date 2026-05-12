@@ -567,7 +567,15 @@ void drawAutoCoilScreen() {
   tft.print("-");
 
   tft.setTextColor(ST77XX_YELLOW);
-  tft.setCursor(10, 92);
+  tft.setCursor(10, 82);
+  tft.println("OKAY = correct wire");
+  tft.setCursor(10, 94);
+  tft.println("SWAPED = other wire");
+  tft.setCursor(10, 106);
+  tft.println("BAD = no valid match");
+
+  tft.setTextColor(ST77XX_YELLOW);
+  tft.setCursor(10, 108);
   tft.println("# = TOGGLE");
 
   tft.setCursor(10, 104);
