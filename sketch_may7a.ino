@@ -523,19 +523,16 @@ void updateAuxTestScreen() {
 void drawAutoCoilScreen() {
   tft.fillScreen(ST77XX_BLACK);
 
-  tft.setTextColor(ST77XX_GREEN);
-  tft.setTextSize(2);
-  tft.setCursor(10, 10);
+  tft.setTextColor(ST77XX_CYAN);
+  tft.setTextSize(1);
+  tft.setCursor(8, 6);
   tft.println("AUTO COIL");
 
-  tft.drawLine(10, 34, 118, 34, ST77XX_WHITE);
+  tft.drawLine(8, 16, 120, 16, ST77XX_WHITE);
 
   tft.setTextSize(1);
   tft.setTextColor(ST77XX_WHITE);
-  tft.setCursor(10, 52);
-  tft.println("Automatic function");
-
-  tft.setCursor(10, 66);
+  tft.setCursor(10, 30);
   if (coilEnergised) {
     tft.print("Status: ENERGISED");
   } else {
@@ -544,6 +541,14 @@ void drawAutoCoilScreen() {
 
   tft.setTextColor(ST77XX_YELLOW);
   tft.setCursor(10, 82);
+  tft.println("OKAY = correct wire");
+  tft.setCursor(10, 94);
+  tft.println("SWAPED = other wire");
+  tft.setCursor(10, 106);
+  tft.println("BAD = no valid match");
+
+  tft.setTextColor(ST77XX_YELLOW);
+  tft.setCursor(10, 108);
   tft.println("# = TOGGLE");
 
   tft.setCursor(10, 120);
