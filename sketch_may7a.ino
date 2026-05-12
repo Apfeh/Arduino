@@ -17,7 +17,7 @@
 #define BUZZER_PIN  21
 
 // Coil energise output
-#define COIL_PIN    22
+#define COIL_PIN    34
 
 // Screen size
 const int SCREEN_W = 128;
